@@ -1,0 +1,45 @@
+{
+  "name": "typeorm-d1",
+  "version": "1.0.0",
+  "description": "TypeORM driver for Cloudflare D1",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "test:ui": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch"
+  },
+  "keywords": [
+    "typeorm",
+    "cloudflare",
+    "d1",
+    "sqlite",
+    "orm",
+    "driver"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "typeorm": "^0.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231218.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "better-sqlite3": "^12.4.1",
+    "cross-env": "^10.1.0",
+    "jest": "^30.2.0",
+    "miniflare": "^2.14.0",
+    "ts-jest": "^29.4.5",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "typeorm": "^0.3.0"
+  }
+}
