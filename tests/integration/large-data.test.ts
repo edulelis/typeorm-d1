@@ -3,6 +3,7 @@ import { DataSource } from "typeorm";
 import { createTestDataSource, cleanupDataSource } from "../fixtures/database";
 import { User, Post, Profile, Tag } from "../fixtures/entities";
 import { cleanupDatabase } from "../setup";
+import { executeD1Batch } from "../../src/factory";
 
 describe("Large Data Tests", () => {
   let dataSource: DataSource;
@@ -29,6 +30,18 @@ describe("Large Data Tests", () => {
       await queryRunner.release();
     }
   });
+
+  async function insertUsers(prefix: string, count: number): Promise<void> {
+    const chunkSize = 100;
+    const statements = Array.from({ length: count }, (_, i) => ({
+      query: "INSERT INTO users (name, email) VALUES (?, ?)",
+      parameters: [`User ${i}`, `${prefix}${i}@example.com`],
+    }));
+
+    for (let i = 0; i < statements.length; i += chunkSize) {
+      await executeD1Batch(dataSource, statements.slice(i, i + chunkSize));
+    }
+  }
 
   describe("Large Text Data", () => {
     it("should handle large text in name field", async () => {
@@ -127,15 +140,7 @@ describe("Large Data Tests", () => {
 
   describe("Performance with Large Data", () => {
     it("should handle findOne efficiently with large dataset", async () => {
-      // Create many users
-      const users = Array.from({ length: 1000 }, (_, i) =>
-        userRepository.create({
-          name: `User ${i}`,
-          email: `perf${i}@example.com`,
-        })
-      );
-
-      await userRepository.save(users);
+      await insertUsers("perf", 1000);
 
       // Find a specific user (should use index on email)
       const startTime = Date.now();
@@ -151,15 +156,7 @@ describe("Large Data Tests", () => {
     });
 
     it("should handle pagination with large dataset", async () => {
-      // Create many users
-      const users = Array.from({ length: 500 }, (_, i) =>
-        userRepository.create({
-          name: `User ${i}`,
-          email: `page${i}@example.com`,
-        })
-      );
-
-      await userRepository.save(users);
+      await insertUsers("page", 500);
 
       // Test pagination
       const page1 = await userRepository.find({
@@ -178,4 +175,3 @@ describe("Large Data Tests", () => {
     });
   });
 });
-
