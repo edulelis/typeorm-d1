@@ -1,7 +1,7 @@
-import { Table } from "typeorm/schema-builder/table/Table";
-import { TableColumn } from "typeorm/schema-builder/table/TableColumn";
-import { TableIndex } from "typeorm/schema-builder/table/TableIndex";
-import { TableForeignKey } from "typeorm/schema-builder/table/TableForeignKey";
+import { Table } from "typeorm/schema-builder/table/Table.js";
+import { TableColumn } from "typeorm/schema-builder/table/TableColumn.js";
+import { TableIndex } from "typeorm/schema-builder/table/TableIndex.js";
+import { TableForeignKey } from "typeorm/schema-builder/table/TableForeignKey.js";
 import { D1ValidationError } from "../errors";
 
 /**

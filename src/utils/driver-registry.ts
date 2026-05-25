@@ -1,5 +1,5 @@
-import { DriverFactory } from "typeorm/driver/DriverFactory";
-import { DataSource } from "typeorm/data-source/DataSource";
+import { DriverFactory } from "typeorm/driver/DriverFactory.js";
+import { DataSource } from "typeorm/data-source/DataSource.js";
 import { D1Driver } from "../driver/d1";
 import { D1Database } from "../types";
 import { D1ConnectionError } from "../errors";
@@ -31,7 +31,12 @@ export class D1DriverRegistry {
       const driverOptions = (connection.options as { driver?: { database?: D1Database } }).driver;
       
       // Check if this is a D1 connection
-      if (driverOptions?.database && typeof driverOptions.database.prepare === "function") {
+      if (
+        driverOptions?.database &&
+        typeof driverOptions.database.prepare === "function" &&
+        typeof driverOptions.database.batch === "function" &&
+        typeof driverOptions.database.exec === "function"
+      ) {
         return new D1Driver(connection);
       }
       
@@ -80,4 +85,3 @@ export class D1DriverRegistry {
     return this.isRegistered;
   }
 }
-

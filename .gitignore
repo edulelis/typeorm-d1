@@ -1,9 +1,12 @@
 node_modules/
 dist/
+coverage/
 *.log
 .DS_Store
 *.tsbuildinfo
+tests/**/*.d.ts
+.mf/
+.wrangler/
 .env
 .env.local
-
 

@@ -1,16 +1,42 @@
 // D1 database type definitions
 
+export type D1Bindable =
+  | string
+  | number
+  | null
+  | ArrayBuffer
+  | ArrayBufferView;
+
+export type D1SessionConstraint = "first-primary" | "first-unconstrained";
+export type D1SessionBookmark = string;
+
 /**
  * Cloudflare D1 database interface.
- * 
- * This interface matches the D1Database API provided by Cloudflare Workers.
- * 
+ *
+ * This mirrors the stable subset of the Cloudflare Workers D1 API used by the
+ * driver, while keeping optional newer/session APIs available for consumers.
+ *
  * @public
  */
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
   batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
   exec(query: string): Promise<D1ExecResult>;
+  withSession?(
+    constraintOrBookmark?: D1SessionBookmark | D1SessionConstraint
+  ): D1DatabaseSession;
+  dump?(): Promise<ArrayBuffer>;
+}
+
+/**
+ * D1 database session interface.
+ *
+ * @public
+ */
+export interface D1DatabaseSession {
+  prepare(query: string): D1PreparedStatement;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  getBookmark(): D1SessionBookmark | null;
 }
 
 /**
@@ -19,11 +45,11 @@ export interface D1Database {
  * @public
  */
 export interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
+  bind(...values: D1Bindable[]): D1PreparedStatement;
   first<T = unknown>(colName?: string): Promise<T | null>;
   run(): Promise<D1Result>;
   all<T = unknown>(): Promise<D1Result<T>>;
-  raw<T = unknown>(): Promise<T[]>;
+  raw<T = unknown>(options?: { columnNames?: boolean }): Promise<T[]>;
 }
 
 /**
@@ -55,4 +81,3 @@ export interface D1ExecResult {
   count: number;
   duration: number;
 }
-

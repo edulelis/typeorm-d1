@@ -1,7 +1,7 @@
 // D1 DataSource factory function
 
 import { DataSource, DataSourceOptions } from "typeorm";
-import { D1Database } from "../types";
+import { D1DataSourceOptions } from "../types";
 import { D1DriverRegistry } from "../utils/driver-registry";
 
 /**
@@ -36,9 +36,7 @@ import { D1DriverRegistry } from "../utils/driver-registry";
  * @public
  */
 export function createD1DataSource(
-  options: Omit<DataSourceOptions, "type" | "database"> & {
-    database: D1Database;
-  }
+  options: D1DataSourceOptions
 ): DataSource {
   // Register D1 driver (idempotent)
   D1DriverRegistry.register();
@@ -63,3 +61,14 @@ export function createD1DataSource(
   }
 }
 
+/**
+ * Registers the D1 driver with TypeORM's DriverFactory.
+ *
+ * Most applications should use createD1DataSource(), which calls this
+ * automatically. This function is provided for advanced manual DataSource setup.
+ *
+ * @public
+ */
+export function registerD1Driver(): void {
+  D1DriverRegistry.register();
+}

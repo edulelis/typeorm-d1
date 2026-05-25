@@ -42,7 +42,7 @@ export async function cleanupDataSource(dataSource: DataSource): Promise<void> {
 export async function resetDatabase(db: D1Database): Promise<void> {
   // Get all tables
   const tables = await db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND substr(lower(name), 1, 4) != '_cf_'"
   ).all<{ name: string }>();
 
   if (tables.results) {
@@ -81,4 +81,3 @@ export async function clearAllTables(dataSource: DataSource): Promise<void> {
     await queryRunner.release();
   }
 }
-

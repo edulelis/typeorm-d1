@@ -1,327 +1,286 @@
-# TypeORM Driver for Cloudflare D1
+# typeorm-d1
 
-A custom TypeORM driver that enables using Cloudflare D1 (SQLite-based serverless database) with TypeORM's full API, including entities, repositories, and query builder.
+TypeORM DataSource adapter for Cloudflare D1.
 
-## Features
+This package lets a TypeORM `DataSource` execute SQLite-compatible TypeORM
+queries against a Cloudflare D1 binding. It supports repositories, query
+builder, schema synchronization for supported SQLite operations, migrations,
+query logging, view introspection, and an explicit D1 batch helper.
 
-- ✅ Full TypeORM API support (`createConnection`, `repository.save`, `findOne`, etc.)
-- ✅ Works with Cloudflare Workers and Pages Functions
-- ✅ Transaction support via D1 batch API
-- ✅ Schema synchronization and migrations
-- ✅ TypeScript support with full type definitions
-- ✅ Edge runtime compatible (no Node.js dependencies)
+It does not provide true interactive database transactions. TypeORM transaction
+methods are compatibility shims; use explicit D1 batches when you need D1's
+atomic multi-statement batch behavior.
 
 ## Installation
 
 ```bash
-npm install typeorm-d1 typeorm
+npm install typeorm-d1 typeorm reflect-metadata
 ```
 
-## Usage
+`typeorm` and `reflect-metadata` are peer dependencies. The package does not
+bundle TypeORM, so applications keep a single TypeORM copy.
 
-### Basic Setup
-
-**Option 1: Using the helper function (Recommended)**
-
-```typescript
-import { createD1DataSource } from "typeorm-d1";
-import { User } from "./entity/User";
-
-// In your Cloudflare Worker or Pages Function
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const dataSource = createD1DataSource({
-      database: env.DB, // D1 database instance from Cloudflare
-      entities: [User],
-      synchronize: true, // Auto-create tables (use migrations in production)
-    });
-
-    await dataSource.initialize();
-    
-    // Use TypeORM as normal
-    const userRepo = dataSource.getRepository(User);
-    const users = await userRepo.find();
-    
-    return new Response(JSON.stringify(users), {
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-};
-```
-
-**Option 2: Using DataSource directly (Advanced)**
+## Basic Usage
 
 ```typescript
-import { DataSource } from "typeorm";
-import { D1Driver } from "typeorm-d1";
-import { User } from "./entity/User";
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    // Note: This approach requires manual driver registration
-    // Option 1 (createD1DataSource) is recommended for most use cases
-    const dataSource = new DataSource({
-      type: "sqlite", // D1 is SQLite-based
-      database: ":memory:", // Dummy path (not used with D1)
-      driver: {
-        database: env.DB, // D1 database instance
-      },
-      entities: [User],
-      synchronize: true,
-    } as any);
-
-    await dataSource.initialize();
-    // ... rest of the code
-  }
-};
-```
-
-### Entity Definition
-
-```typescript
+import "reflect-metadata";
 import { Entity, PrimaryGeneratedColumn, Column } from "typeorm";
+import { createD1DataSource } from "typeorm-d1";
 
-@Entity()
+@Entity("users")
 export class User {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column()
-  name: string;
+  email!: string;
 
   @Column()
-  email: string;
-
-  @Column({ type: "datetime", default: () => "CURRENT_TIMESTAMP" })
-  createdAt: Date;
+  name!: string;
 }
-```
 
-### Using Repositories
-
-```typescript
-// Create
-const user = userRepo.create({ name: "John", email: "john@example.com" });
-await userRepo.save(user);
-
-// Read
-const users = await userRepo.find();
-const user = await userRepo.findOne({ where: { id: 1 } });
-
-// Update
-user.name = "Jane";
-await userRepo.save(user);
-
-// Delete
-await userRepo.remove(user);
-```
-
-### Using Query Builder
-
-```typescript
-const users = await userRepo
-  .createQueryBuilder("user")
-  .where("user.email = :email", { email: "john@example.com" })
-  .getMany();
-```
-
-### Transactions
-
-```typescript
-const queryRunner = dataSource.createQueryRunner();
-await queryRunner.startTransaction();
-
-try {
-  await queryRunner.manager.save(user1);
-  await queryRunner.manager.save(user2);
-  await queryRunner.commitTransaction();
-} catch (err) {
-  await queryRunner.rollbackTransaction();
-  // Note: In D1, rollback only cleans up transaction state.
-  // Queries executed before the error are already committed.
-  // See ISSUES.md for details and workarounds.
-} finally {
-  await queryRunner.release();
+export interface Env {
+  DB: D1Database;
 }
+
+let dataSource: ReturnType<typeof createD1DataSource> | undefined;
+
+export default {
+  async fetch(_request: Request, env: Env): Promise<Response> {
+    dataSource ??= createD1DataSource({
+      database: env.DB,
+      entities: [User],
+      synchronize: false,
+      logging: false,
+    });
+
+    if (!dataSource.isInitialized) {
+      await dataSource.initialize();
+    }
+
+    const users = await dataSource.getRepository(User).find();
+    return Response.json(users);
+  },
+};
 ```
 
-**Important**: D1 does not support true transaction rollback. Queries are executed immediately even within transactions. The `rollbackTransaction()` method cleans up transaction state but cannot undo already-executed queries. For error handling, use application-level validation and compensating transactions instead of relying on rollback.
+Use migrations rather than `synchronize: true` in production. D1 is SQLite
+based, and SQLite has limited `ALTER TABLE` support.
 
-### Migrations
+## Public API
 
 ```typescript
-import { createD1DataSource } from "typeorm-d1";
+import {
+  createD1DataSource,
+  registerD1Driver,
+  executeD1Batch,
+  D1Driver,
+  D1QueryRunner,
+  D1SchemaBuilder,
+  D1DriverError,
+  D1QueryError,
+} from "typeorm-d1";
 
+import type {
+  D1DataSourceOptions,
+  D1Database,
+  D1BatchStatement,
+  D1Result,
+  D1ErrorCode,
+} from "typeorm-d1";
+```
+
+### `createD1DataSource(options)`
+
+Creates a TypeORM `DataSource` configured for a D1 binding.
+
+```typescript
 const dataSource = createD1DataSource({
   database: env.DB,
   entities: [User],
-  migrations: ["migrations/*.ts"],
-  migrationsTableName: "migrations",
+  migrations: [CreateUsers1710000000000],
+  logging: true,
+});
+```
+
+### `registerD1Driver()`
+
+Registers the D1 driver with TypeORM's `DriverFactory`. Most applications do
+not need this because `createD1DataSource()` calls it automatically.
+
+```typescript
+import { DataSource } from "typeorm";
+import { registerD1Driver } from "typeorm-d1";
+
+registerD1Driver();
+
+const dataSource = new DataSource({
+  type: "sqlite",
+  database: ":memory:",
+  driver: { database: env.DB },
+  entities: [User],
+} as any);
+```
+
+## Queries And Repositories
+
+Repository and query builder operations work through TypeORM as usual.
+
+```typescript
+const repository = dataSource.getRepository(User);
+
+await repository.save({ email: "ada@example.com", name: "Ada" });
+
+const users = await repository
+  .createQueryBuilder("user")
+  .where("user.email = :email", { email: "ada@example.com" })
+  .getMany();
+```
+
+Raw parameterized queries are supported. `undefined` bind parameters are
+converted to `null` for D1 compatibility.
+
+```typescript
+await dataSource.query("SELECT * FROM users WHERE email = ?", [
+  "ada@example.com",
+]);
+```
+
+## Transactions And D1 Batches
+
+Cloudflare D1 supports atomic batches through `D1Database.batch()`. It does not
+support interactive transactions where code can run a query, inspect the result,
+then decide whether to commit or roll back later.
+
+For that reason, TypeORM transaction methods in this driver are compatibility
+shims:
+
+- `startTransaction()` marks the query runner as transaction-active.
+- Queries execute immediately.
+- `commitTransaction()` clears local transaction state.
+- `rollbackTransaction()` clears local transaction state and does not undo
+  already executed writes.
+- Nested transactions are rejected.
+
+Use `executeD1Batch()` or `D1QueryRunner.executeBatch()` when all statements are
+known up front and you need D1's atomic batch behavior.
+
+```typescript
+import { executeD1Batch } from "typeorm-d1";
+
+await executeD1Batch(dataSource, [
+  {
+    query: "INSERT INTO users (email, name) VALUES (?, ?)",
+    parameters: ["ada@example.com", "Ada"],
+  },
+  {
+    query: "INSERT INTO users (email, name) VALUES (?, ?)",
+    parameters: ["grace@example.com", "Grace"],
+  },
+]);
+```
+
+Do not treat D1 batches as a drop-in replacement for TypeORM repository
+transactions. Repository operations need generated ids, relation state, reads,
+and errors immediately.
+
+## Migrations
+
+TypeORM class migrations are supported for SQLite-compatible operations.
+
+```typescript
+import { MigrationInterface, QueryRunner } from "typeorm";
+
+export class CreateUsers1710000000000 implements MigrationInterface {
+  name = "CreateUsers1710000000000";
+
+  async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL
+      )
+    `);
+  }
+
+  async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query("DROP TABLE IF EXISTS users");
+  }
+}
+```
+
+```typescript
+const dataSource = createD1DataSource({
+  database: env.DB,
+  entities: [User],
+  migrations: [CreateUsers1710000000000],
 });
 
 await dataSource.initialize();
 await dataSource.runMigrations();
 ```
 
-## API Reference
+SQLite/D1 cannot apply every schema mutation in place. For unsupported changes
+such as many column alterations, write migrations that recreate tables safely.
 
-### DataSource Options
+## Logging
 
-```typescript
-interface D1DataSourceOptions {
-  type: "d1";
-  driver: {
-    database: D1Database; // Required: D1 database instance
-  };
-  entities: Function[]; // Your entity classes
-  synchronize?: boolean; // Auto-create tables
-  migrations?: string[]; // Migration file paths
-  logging?: boolean; // Enable query logging
-}
-```
-
-### D1Database Interface
-
-The driver expects a D1 database instance that implements the following interface:
+TypeORM query logging and custom loggers are supported.
 
 ```typescript
-interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-  batch(statements: D1PreparedStatement[]): Promise<D1Result[]>;
-  exec(query: string): Promise<D1ExecResult>;
-}
+const dataSource = createD1DataSource({
+  database: env.DB,
+  entities: [User],
+  logging: true,
+  maxQueryExecutionTime: 100,
+});
 ```
 
-This matches Cloudflare's D1 API exactly.
+Custom TypeORM loggers receive query, slow query, and query error events.
 
 ## Limitations
 
-Due to SQLite/D1 constraints:
-
-- **ALTER TABLE**: Limited support. Some operations (DROP COLUMN, RENAME COLUMN) require recreating the table via migrations.
-- **Schemas**: D1 doesn't support database schemas.
-- **UUID Generation**: No native UUID support. Use `hex(randomblob(16))` or application-level UUID generation.
-- **Transactions**: 
-  - Supported via D1's batch API. Nested transactions are not supported.
-  - **Important**: D1 does not support true transaction rollback. Once a query is executed within a transaction, it is immediately committed. The `rollbackTransaction()` method will clean up transaction state but cannot undo already-executed queries. See [ISSUES.md](./ISSUES.md) for details and workarounds.
-- **Connection Pooling**: D1 uses a stateless connection model. There's no traditional connection pooling - each query uses the D1 database instance directly.
-
-## TypeScript Support
-
-Full TypeScript support with type definitions included. The package exports:
-
-```typescript
-// Main exports
-import { 
-  D1Driver, 
-  D1QueryRunner, 
-  D1DriverFactory,
-  D1SchemaBuilder,
-  createD1DataSource 
-} from "typeorm-d1";
-
-// Types
-import type { D1Database, D1Result, D1ErrorCode } from "typeorm-d1";
-
-// Errors
-import { 
-  D1DriverError,
-  D1ConnectionError,
-  D1ValidationError,
-  D1QueryError,
-  D1TransactionError 
-} from "typeorm-d1";
-```
+- No database schemas. D1 is SQLite based.
+- Limited `ALTER TABLE`; unsupported schema operations should be handled with
+  explicit migrations.
+- TypeORM transaction rollback does not undo writes.
+- Nested TypeORM transactions are not supported.
+- D1 sessions/read-replica bookmark APIs are typed but not wrapped by the
+  driver.
+- UUIDs should be generated by application code or SQLite expressions such as
+  `hex(randomblob(16))`.
+- This package is tested with Miniflare's D1 implementation and TypeORM 0.3.x.
 
 ## Compatibility
 
-- **TypeORM**: v0.3.0+
-- **Cloudflare Workers**: All versions
-- **Cloudflare Pages**: All versions
-- **Runtime**: Edge (Cloudflare Workers runtime)
+- TypeORM: `^0.3.0`
+- Cloudflare Workers D1 bindings
+- Local tests: Miniflare 4
+- Tooling: Node.js 20 and 22
 
-## Testing
-
-The project includes comprehensive tests using Jest and Miniflare for local D1 testing:
-
-```bash
-# Run all tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Run tests with coverage
-npm run test:coverage
-```
-
-### Test Coverage
-
-Current test coverage (358 tests passing):
-
-**Overall Coverage:**
-- **Statements**: 85.28%
-- **Branches**: 73.57%
-- **Functions**: 85.41%
-- **Lines**: 84.78%
-
-**Module Coverage (Aggregated by Folder):**
-
-**Driver (`src/driver/d1/`):**
-- **Overall**: 90.9% (statements), 85.81% (branches), 90.16% (functions), 90.61% (lines)
-- **d1-driver.ts**: 96.66% (statements), 80% (branches)
-- **d1-query-runner.ts**: 92.15% (statements), 87.5% (branches)
-- **d1-driver-factory.ts**: 42.85% (statements)
-- **d1-schema-builder.ts**: 50% (statements)
-
-**Factory (`src/factory/`):**
-- **Overall**: 100% coverage
-- **create-d1-data-source.ts**: 100% coverage
-
-**Utils (`src/utils/`):**
-- **Overall**: 74.7% (statements), 62.16% (branches), 78.26% (functions), 74.55% (lines)
-- **query-normalizer.ts**: 100% coverage
-- **constants.ts**: 100% coverage
-- **metadata-parser.ts**: 86.11% (statements), 68.75% (branches)
-- **error-handler.ts**: 71.11% (statements), 60.34% (branches)
-- **driver-registry.ts**: 63.33% (statements), 50% (branches)
-- **guards.ts**: 40% (statements), 47.61% (branches)
-
-**Errors (`src/errors/`):**
-- **Overall**: 92.85% (statements), 33.33% (branches), 70% (functions), 91.3% (lines)
-- **D1Error.ts**: 90.9% (statements), 33.33% (branches)
-
-Test suites include:
-- Connection and DataSource tests
-- CRUD operations
-- Query builder
-- Relations (OneToMany, ManyToOne, ManyToMany, OneToOne)
-- Transactions (with D1 limitations documented)
-- Schema synchronization
-- Error handling
-- SQL injection protection
-- Concurrency tests
-- Migration idempotency
-- Large data handling
-- Parameter binding
-- Type coercion
-- Complex queries
-- Edge cases
+The published package includes CommonJS, ESM, and TypeScript declaration
+entrypoints.
 
 ## Development
 
 ```bash
-# Build
+npm ci
 npm run build
-
-# The driver will be compiled to dist/
+npm test
+npm run test:coverage
+npm run verify
 ```
 
-## Known Issues
+`npm run verify` builds the package, runs the Jest suite, checks CJS/ESM
+imports, runs a built-package D1 smoke test, and validates package contents.
 
-See [ISSUES.md](./ISSUES.md) for a comprehensive list of known issues, limitations, and workarounds.
+Coverage reports are generated locally in `coverage/` and are not committed.
+
+## Security
+
+Please report security issues privately. See [SECURITY.md](./SECURITY.md).
 
 ## License
 
 MIT
-

@@ -35,7 +35,7 @@
 export { D1Driver, D1QueryRunner, D1DriverFactory, D1SchemaBuilder } from "./driver/d1";
 
 // Factory exports
-export { createD1DataSource } from "./factory";
+export { createD1DataSource, registerD1Driver, executeD1Batch } from "./factory";
 
 // Type exports
 export * from "./types";

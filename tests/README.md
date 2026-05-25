@@ -1,229 +1,70 @@
-# TypeORM D1 Driver - Test Suite
+# Test Suite
 
-This directory contains the comprehensive test suite for the TypeORM D1 driver.
+The project uses Jest for unit and integration tests. Miniflare 4 provides the
+local Cloudflare D1 database used by integration tests.
 
-## Test Structure
-
-```
-tests/
-├── setup.ts                 # Test setup and database initialization
-├── fixtures/                # Test fixtures and helpers
-│   ├── entities.ts          # Test entity definitions
-│   └── database.ts          # Database setup utilities
-├── integration/             # Integration tests
-│   ├── connection.test.ts   # Connection and DataSource tests
-│   ├── schema.test.ts       # Schema synchronization tests
-│   ├── crud.test.ts         # CRUD operation tests
-│   ├── querybuilder.test.ts # QueryBuilder tests
-│   ├── transactions.test.ts # Transaction tests
-│   └── relations.test.ts    # Relation tests
-└── README.md               # This file
-```
-
-## Running Tests
-
-### Install Dependencies
-
-```bash
-npm install
-```
-
-### Run All Tests
+## Commands
 
 ```bash
 npm test
-```
-
-### Run Tests in Watch Mode
-
-```bash
-npm test:watch
-```
-
-### Run Tests with Coverage
-
-```bash
-npm test:coverage
-```
-
-### Run Tests with UI
-
-```bash
-npm test:ui
-```
-
-### Run Specific Test File
-
-```bash
 npm test -- tests/integration/crud.test.ts
+npm run test:coverage
+npm run verify
 ```
 
-## Test Environment
+`npm run verify` also builds the public package and runs package import/content
+smoke checks.
 
-Tests use **Miniflare** to create a local D1 database instance for testing. This allows us to test the driver without requiring a Cloudflare Worker environment.
+## Structure
 
-### Test Database
+```text
+tests/
+  setup.ts                  Miniflare D1 setup and cleanup helpers
+  fixtures/
+    database.ts             DataSource helpers
+    entities.ts             Shared TypeORM test entities
+  integration/              D1-backed behavior tests
+  unit/                     Focused utility/driver tests
+```
 
-The test suite creates an in-memory D1 database using Miniflare. Each test suite cleans up the database after execution to ensure test isolation.
+## D1 Setup
 
-## Test Coverage
-
-### Connection Tests
-- DataSource creation and initialization
-- Connection lifecycle
-- Connection options validation
-- Error handling
-
-### Schema Tests
-- Table creation
-- Column type mapping
-- Constraints (primary keys, unique, foreign keys)
-- Indexes
-- Schema modifications (with SQLite limitations)
-
-### CRUD Tests
-- Create (Insert) operations
-- Read (Select) operations
-- Update operations
-- Delete operations
-- Bulk operations
-
-### QueryBuilder Tests
-- Basic queries
-- Where conditions
-- Sorting and pagination
-- Aggregations
-- Updates and deletes via QueryBuilder
-
-### Transaction Tests
-- Transaction lifecycle
-- Commit and rollback
-- Multiple operations in transactions
-- Error handling in transactions
-- D1 batch API usage
-
-### Relation Tests
-- OneToMany / ManyToOne relations
-- ManyToMany relations
-- OneToOne relations
-- Relation loading (eager/lazy)
-- Cascade operations
-
-## Test Entities
-
-The test suite uses several test entities:
-
-- **User**: Basic entity for CRUD and relation tests
-- **Post**: Entity with OneToMany relation to User
-- **Tag**: Entity with ManyToMany relation to Post
-- **Profile**: Entity with OneToOne relation to User
-- **TestColumns**: Entity for testing various column types
-- **TestConstraints**: Entity for testing constraints
-
-## Writing New Tests
-
-### Test Structure
+Tests create a Miniflare instance with:
 
 ```typescript
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { createTestDataSource, cleanupDataSource } from "../fixtures/database";
-import { YourEntity } from "../fixtures/entities";
-import { cleanupDatabase } from "../setup";
-
-describe("Your Test Suite", () => {
-  let dataSource: DataSource;
-  let repository: any;
-
-  beforeAll(async () => {
-    dataSource = await createTestDataSource([YourEntity]);
-    await dataSource.initialize();
-    repository = dataSource.getRepository(YourEntity);
-  });
-
-  afterAll(async () => {
-    await cleanupDataSource(dataSource);
-    await cleanupDatabase();
-  });
-
-  beforeEach(async () => {
-    // Clean up test data
-    await repository.delete({});
-  });
-
-  it("should test something", async () => {
-    // Your test code
-  });
+new Miniflare({
+  modules: true,
+  script: `export default { fetch() { return new Response("OK"); } }`,
+  d1Databases: { TEST_DB: "test-db" },
 });
 ```
 
-### Best Practices
-
-1. **Clean up after tests**: Always clean up test data in `beforeEach` or `afterEach`
-2. **Use test fixtures**: Use entities from `fixtures/entities.ts` for consistent testing
-3. **Test isolation**: Each test should be independent and not rely on other tests
-4. **Error handling**: Test both success and error cases
-5. **Edge cases**: Test boundary conditions and edge cases
-
-## Known Limitations
-
-### SQLite Limitations
-
-- **DROP COLUMN**: Not supported. Tests verify that this throws an error.
-- **ALTER COLUMN**: Limited support. Tests verify that this throws an error.
-- **ADD FOREIGN KEY**: Not supported on existing tables. Tests verify this behavior.
-
-### D1 Limitations
-
-- **Transactions**: Supported via batch API, not traditional transactions.
-- **Nested Transactions**: Not supported.
-- **Connection Pooling**: Not applicable (stateless).
-
-## Debugging Tests
-
-### Enable Logging
-
-Set `logging: true` in test data source:
+The D1 binding is loaded with:
 
 ```typescript
-dataSource = await createTestDataSourceWithOptions([User], { logging: true });
+await mf.getD1Database("TEST_DB");
 ```
 
-### View Database State
+Do not reintroduce deprecated `__D1_BETA__` bindings.
 
-You can query the database directly in tests:
+## Test Expectations
 
-```typescript
-const db = await getTestDatabase();
-const result = await db.prepare("SELECT * FROM users").all();
-console.log(result.results);
-```
+- Repository/query-builder behavior belongs in integration tests.
+- Pure SQL generation, guards, and error mapping can use unit tests.
+- Public API changes need source tests and, when package output is affected,
+  package smoke coverage through `scripts/verify-package.cjs`.
+- README behavior claims should have matching tests.
+- Transaction tests must state the compatibility-shim behavior clearly:
+  rollback does not undo writes.
+- D1 atomic batch behavior belongs in explicit batch tests, not TypeORM
+  transaction tests.
+- Schema tests should assert real SQLite metadata when claiming constraints,
+  for example `PRAGMA foreign_key_list`.
 
-### Debug Specific Test
+## Cleanup
 
-Use `it.only` to run only a specific test:
+Use `cleanupDatabase()` between tests that create schema or data. The cleanup
+helper skips SQLite and Miniflare internal tables.
 
-```typescript
-it.only("should test something", async () => {
-  // Your test code
-});
-```
-
-## CI/CD Integration
-
-Tests are designed to run in CI/CD environments. The test suite:
-
-- Uses Miniflare for local D1 database
-- Doesn't require external dependencies
-- Cleans up after each test
-- Provides coverage reports
-
-## Contributing
-
-When adding new tests:
-
-1. Follow the existing test structure
-2. Add tests to the appropriate test file
-3. Update this README if adding new test categories
-4. Ensure tests pass before submitting
-5. Add documentation for new test patterns
-
+Generated files such as `coverage/`, `dist/`, and test `.d.ts` files should not
+be committed.

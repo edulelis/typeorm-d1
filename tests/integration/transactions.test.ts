@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "@jest/glo
 import { DataSource } from "typeorm";
 import { createTestDataSource, cleanupDataSource } from "../fixtures/database";
 import { User, Post, Profile, Tag } from "../fixtures/entities";
-import { cleanupDatabase } from "../setup";
+import { cleanupDatabase, getTestDatabase } from "../setup";
+import { createD1DataSource } from "../../src/factory";
 
 describe("Transaction Tests", () => {
   let dataSource: DataSource;
@@ -220,9 +221,7 @@ describe("Transaction Tests", () => {
       await queryRunner.release();
     });
 
-    it("should verify rollback discards changes", async () => {
-      // Note: This test documents D1's limitation - rollback doesn't actually undo queries
-      // D1 executes queries immediately even in transactions, so rollback only cleans up state
+    it("should verify rollback does not discard changes", async () => {
       const queryRunner = dataSource.createQueryRunner();
       await queryRunner.startTransaction();
 
@@ -234,12 +233,8 @@ describe("Transaction Tests", () => {
       await queryRunner.manager.save(user);
       await queryRunner.rollbackTransaction();
 
-      // D1 limitation: rollback doesn't undo already-executed queries
-      // The user will still exist in the database
-      // This is expected behavior for D1 - see ISSUES.md for details
       const userAfterRollback = await userRepository.findOne({ where: { email: "john-rollback-discard@example.com" } });
-      // In D1, the user will exist because queries are executed immediately
-      // We verify rollback completed without error
+      expect(userAfterRollback).toBeDefined();
       expect(queryRunner.isTransactionActive).toBe(false);
 
       await queryRunner.release();
@@ -295,34 +290,59 @@ describe("Transaction Tests", () => {
 
   describe("Transaction Limitations", () => {
     it("should document D1 transaction limitations", () => {
-      // D1 uses batch API for transactions, not traditional transactions
-      // This test documents the behavior
+      // TypeORM transaction methods are compatibility shims in this driver.
+      // Atomic D1 batches are exposed through executeD1Batch()/executeBatch().
       expect(true).toBe(true);
     });
 
-    it("should verify batch API usage", async () => {
-      const queryRunner = dataSource.createQueryRunner();
+    it("should not use D1 batch for TypeORM transaction compatibility", async () => {
+      const db = await getTestDatabase();
+      let batchCalls = 0;
+      const wrappedDb = {
+        prepare: db.prepare.bind(db),
+        exec: db.exec.bind(db),
+        batch: (...args: Parameters<typeof db.batch>) => {
+          batchCalls++;
+          return db.batch(...args);
+        },
+        withSession: db.withSession?.bind(db),
+        dump: db.dump?.bind(db),
+      };
+      const transactionDataSource = createD1DataSource({
+        database: wrappedDb,
+        entities: [User, Post, Profile, Tag],
+        synchronize: true,
+        logging: false,
+      });
+
+      await transactionDataSource.initialize();
+      const queryRunner = transactionDataSource.createQueryRunner();
       await queryRunner.startTransaction();
 
-      // Multiple operations should be batched
       const user1 = queryRunner.manager.create(User, {
         name: "User 1",
-        email: "user1@example.com",
+        email: "user1-no-batch@example.com",
       });
 
       const user2 = queryRunner.manager.create(User, {
         name: "User 2",
-        email: "user2@example.com",
+        email: "user2-no-batch@example.com",
       });
 
       await queryRunner.manager.save([user1, user2]);
       await queryRunner.commitTransaction();
 
-      // Verify both users were saved (batch operation)
-      const users = await userRepository.find();
+      const users = await transactionDataSource.getRepository(User).find({
+        where: [
+          { email: "user1-no-batch@example.com" },
+          { email: "user2-no-batch@example.com" },
+        ],
+      });
       expect(users.length).toBe(2);
+      expect(batchCalls).toBe(0);
 
       await queryRunner.release();
+      await transactionDataSource.destroy();
     });
   });
 
@@ -554,4 +574,3 @@ describe("Transaction Tests", () => {
     });
   });
 });
-

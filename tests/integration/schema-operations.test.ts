@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "@jest/globals";
-import { DataSource, Table, TableColumn, TableIndex, TableForeignKey } from "typeorm";
+import { DataSource, Table, TableColumn, TableIndex, TableForeignKey, View } from "typeorm";
 import { createTestDataSource, cleanupDataSource } from "../fixtures/database";
 import { User, Post, Profile, Tag } from "../fixtures/entities";
 import { getTestDatabase, cleanupDatabase, closeDatabase } from "../setup";
@@ -122,20 +122,60 @@ describe("Schema Operations Tests", () => {
   });
 
   describe("View Operations", () => {
-    it("should get view (returns undefined - D1 doesn't support views)", async () => {
+    it("should return undefined for a missing view", async () => {
       const view = await queryRunner.getView("non_existent_view");
       expect(view).toBeUndefined();
     });
 
-    it("should get views list (returns empty array - D1 doesn't support views)", async () => {
+    it("should create and read view metadata", async () => {
+      const view = new View({
+        name: "users_view",
+        expression: "SELECT id, name FROM users",
+      });
+
+      await queryRunner.createView(view);
+
+      const loadedView = await queryRunner.getView("users_view");
+      expect(loadedView).toBeDefined();
+      expect(loadedView?.name).toBe("users_view");
+      expect(String(loadedView?.expression)).toContain("SELECT id, name FROM users");
+
+      await queryRunner.dropView("users_view");
+      expect(await queryRunner.getView("users_view")).toBeUndefined();
+    });
+
+    it("should get views list", async () => {
+      await queryRunner.createView(new View({
+        name: "users_view_one",
+        expression: "SELECT id FROM users",
+      }));
+      await queryRunner.createView(new View({
+        name: "users_view_two",
+        expression: "SELECT name FROM users",
+      }));
+
       const views = await queryRunner.getViews();
       expect(Array.isArray(views)).toBe(true);
-      expect(views.length).toBe(0);
+      expect(views.map((view) => view.name)).toEqual(
+        expect.arrayContaining(["users_view_one", "users_view_two"])
+      );
+
+      await queryRunner.dropView("users_view_one");
+      await queryRunner.dropView("users_view_two");
     });
 
     it("should get views with specific names", async () => {
-      const views = await queryRunner.getViews(["view1", "view2"]);
+      await queryRunner.createView(new View({
+        name: "specific_view",
+        expression: "SELECT id FROM users",
+      }));
+
+      const views = await queryRunner.getViews(["specific_view"]);
       expect(Array.isArray(views)).toBe(true);
+      expect(views).toHaveLength(1);
+      expect(views[0].name).toBe("specific_view");
+
+      await queryRunner.dropView("specific_view");
     });
   });
 
@@ -481,4 +521,3 @@ describe("Schema Operations Tests", () => {
     });
   });
 });
-

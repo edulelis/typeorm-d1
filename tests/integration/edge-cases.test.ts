@@ -88,25 +88,18 @@ describe("Edge Cases and Uncovered Paths Tests", () => {
     });
   });
 
-  describe("View Operations (D1 doesn't support, but code exists)", () => {
+  describe("View Operations", () => {
     it("should handle view creation (line 378-380)", async () => {
-      // D1 doesn't support views, but the code exists
-      // Test that it attempts to create a view
       const view = new View({
         name: "test_view",
         expression: "SELECT 1 as test",
       });
 
-      // This will fail because D1 doesn't support views
-      // But it tests the code path
-      try {
-        await queryRunner.createView(view);
-        // If it doesn't throw, that's unexpected
-        expect(true).toBe(false);
-      } catch (error: any) {
-        // Expected to fail
-        expect(error.message).toBeDefined();
-      }
+      await queryRunner.createView(view);
+      const loadedView = await queryRunner.getView("test_view");
+      expect(loadedView).toBeDefined();
+      expect(loadedView?.name).toBe("test_view");
+      await queryRunner.dropView("test_view");
     });
 
     it("should handle view dropping (line 382-385)", async () => {
@@ -200,4 +193,3 @@ describe("Edge Cases and Uncovered Paths Tests", () => {
     });
   });
 });
-

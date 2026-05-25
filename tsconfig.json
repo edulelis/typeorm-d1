@@ -14,10 +14,10 @@
     "resolveJsonModule": true,
     "types": ["@cloudflare/workers-types"],
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "emitDecoratorMetadata": true,
+    "isolatedModules": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]
 }
-
 

@@ -12,26 +12,18 @@ let db: D1Database | undefined;
 
 export async function getTestDatabase(): Promise<D1Database> {
   if (!mf) {
-    // Miniflare 2.x configuration
-    // Miniflare 2.x only supports D1 beta bindings with __D1_BETA__ prefix
     mf = new Miniflare({
-      script: `
-        addEventListener("fetch", (event) => {
-          event.respondWith(new Response("OK"));
-        });
-      `,
-      d1Databases: ["__D1_BETA__TEST_DB"],
+      modules: true,
+      script: `export default { fetch() { return new Response("OK"); } }`,
+      d1Databases: { TEST_DB: "test-db" },
     });
   }
   
   if (!db) {
-    // Miniflare 2.x uses getBindings() to access D1 databases
-    // The binding name must include the __D1_BETA__ prefix
-    const bindings = await mf.getBindings();
-    db = bindings.__D1_BETA__TEST_DB as D1Database;
+    db = (await mf.getD1Database("TEST_DB")) as D1Database;
     
     if (!db) {
-      throw new Error("Failed to get D1 database from Miniflare bindings. Make sure to use __D1_BETA__ prefix.");
+      throw new Error("Failed to get D1 database from Miniflare bindings.");
     }
   }
   
@@ -43,7 +35,7 @@ export async function cleanupDatabase(): Promise<void> {
     try {
       // Get all tables and drop them
       const tables = await db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND substr(lower(name), 1, 4) != '_cf_'"
       ).all<{ name: string }>();
       
       if (tables.results) {
@@ -58,7 +50,7 @@ export async function cleanupDatabase(): Promise<void> {
       
       // Also drop all indices
       const indices = await db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' AND substr(lower(name), 1, 4) != '_cf_'"
       ).all<{ name: string }>();
       
       if (indices.results) {
@@ -84,3 +76,9 @@ export async function closeDatabase(): Promise<void> {
   }
 }
 
+const jestAfterAll = (globalThis as { afterAll?: (fn: () => Promise<void>) => void }).afterAll;
+if (typeof jestAfterAll === "function") {
+  jestAfterAll(async () => {
+    await closeDatabase();
+  });
+}

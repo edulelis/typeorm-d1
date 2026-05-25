@@ -1,20 +1,23 @@
 // D1 query runner implementation for TypeORM
 
-import { AbstractSqliteQueryRunner } from "typeorm/driver/sqlite-abstract/AbstractSqliteQueryRunner";
-import { DataSource } from "typeorm/data-source/DataSource";
-import { QueryResult } from "typeorm/query-runner/QueryResult";
+import { AbstractSqliteQueryRunner } from "typeorm/driver/sqlite-abstract/AbstractSqliteQueryRunner.js";
+import { DataSource } from "typeorm/data-source/DataSource.js";
+import { QueryResult } from "typeorm/query-runner/QueryResult.js";
 import { D1Driver } from "./d1-driver";
-import { D1Result } from "../../types";
-import { Table } from "typeorm/schema-builder/table/Table";
-import { TableColumn } from "typeorm/schema-builder/table/TableColumn";
-import { TableIndex } from "typeorm/schema-builder/table/TableIndex";
-import { TableForeignKey } from "typeorm/schema-builder/table/TableForeignKey";
-import { View } from "typeorm/schema-builder/view/View";
-import { Broadcaster } from "typeorm/subscriber/Broadcaster";
+import { D1BatchStatement, D1Bindable, D1Result } from "../../types";
+import { Table } from "typeorm/schema-builder/table/Table.js";
+import { TableColumn } from "typeorm/schema-builder/table/TableColumn.js";
+import { TableIndex } from "typeorm/schema-builder/table/TableIndex.js";
+import { TableForeignKey } from "typeorm/schema-builder/table/TableForeignKey.js";
+import { View } from "typeorm/schema-builder/view/View.js";
+import { Broadcaster } from "typeorm/subscriber/Broadcaster.js";
+import { BroadcasterResult } from "typeorm/subscriber/BroadcasterResult.js";
+import { ConnectionIsNotSetError } from "typeorm/error/ConnectionIsNotSetError.js";
+import { QueryRunnerAlreadyReleasedError } from "typeorm/error/QueryRunnerAlreadyReleasedError.js";
 import { D1ErrorHandler } from "../../utils/error-handler";
 import { QueryNormalizer } from "../../utils/query-normalizer";
 import { MetadataParser } from "../../utils/metadata-parser";
-import { D1ConnectionError, D1TransactionError, D1ValidationError } from "../../errors";
+import { D1ConnectionError, D1QueryError, D1TransactionError, D1ValidationError } from "../../errors";
 import { D1Guards } from "../../utils/guards";
 
 /**
@@ -84,6 +87,10 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
    * to prevent state from persisting across tests or query runner reuse.
    */
   async release(): Promise<void> {
+    this.loadedTables = [];
+    this.loadedViews = [];
+    this.clearSqlMemory();
+
     if (this.isTransactionActive) {
       this.isTransactionActive = false;
       (this as any).isTransactionActive = false;
@@ -103,24 +110,113 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
   async query(query: string, parameters?: unknown[], useStructuredResult?: false): Promise<unknown>;
   async query(query: string, parameters: unknown[] | undefined, useStructuredResult: true): Promise<QueryResult>;
   async query(query: string, parameters?: unknown[], useStructuredResult?: boolean): Promise<QueryResult | unknown> {
+    if (this.isReleased) {
+      throw new QueryRunnerAlreadyReleasedError();
+    }
+    if (!this.connection.isInitialized) {
+      throw new ConnectionIsNotSetError(this.connection.options.type);
+    }
+
     const database = await this.connect();
     const normalizedQuery = QueryNormalizer.normalizeQuery(query);
     const queryType = QueryNormalizer.determineQueryType(normalizedQuery);
+    const broadcasterResult = new BroadcasterResult();
+    const queryStartTime = Date.now();
+    const maxQueryExecutionTime = this.driver.options.maxQueryExecutionTime;
     
     // For transactions, track the query but execute immediately for results
     if (this.isTransactionActive) {
       this.transactionStatements.push(normalizedQuery);
       this.transactionBindings.push(parameters || []);
     }
-    
-    return this.executeQuery(
-      database,
-      normalizedQuery,
-      parameters,
-      useStructuredResult,
-      queryType.isSelect,
-      queryType.isInsert
-    );
+
+    this.connection.logger.logQuery(normalizedQuery, parameters, this);
+    await this.broadcaster.broadcast("BeforeQuery", normalizedQuery, parameters);
+
+    try {
+      const result = await this.executeQuery(
+        database,
+        normalizedQuery,
+        parameters,
+        useStructuredResult,
+        queryType.isSelect,
+        queryType.isInsert
+      );
+      const queryExecutionTime = Date.now() - queryStartTime;
+      if (maxQueryExecutionTime && queryExecutionTime > maxQueryExecutionTime) {
+        this.connection.logger.logQuerySlow(queryExecutionTime, normalizedQuery, parameters, this);
+      }
+      this.broadcaster.broadcastAfterQueryEvent(
+        broadcasterResult,
+        normalizedQuery,
+        parameters,
+        true,
+        queryExecutionTime,
+        this.getRawResultForBroadcaster(result, !!useStructuredResult),
+        undefined
+      );
+      return result;
+    } catch (error: unknown) {
+      const wrappedError = error instanceof D1QueryError
+        ? error
+        : this.errorHandler.wrapD1Exception(error, normalizedQuery);
+      this.connection.logger.logQueryError(wrappedError, normalizedQuery, parameters, this);
+      this.broadcaster.broadcastAfterQueryEvent(
+        broadcasterResult,
+        normalizedQuery,
+        parameters,
+        false,
+        undefined,
+        undefined,
+        wrappedError
+      );
+      throw wrappedError;
+    } finally {
+      await broadcasterResult.wait();
+    }
+  }
+
+  /**
+   * Executes a set of prepared statements through D1's atomic batch API.
+   *
+   * This is intentionally separate from TypeORM transactions. TypeORM repository
+   * calls need immediate results, while D1 batches require all statements up
+   * front.
+   */
+  async executeBatch(statements: D1BatchStatement[]): Promise<D1Result[]> {
+    if (!Array.isArray(statements) || statements.length === 0) {
+      throw new D1ValidationError("D1 batch requires at least one statement", {
+        operation: "executeBatch",
+      });
+    }
+
+    const database = await this.connect();
+    const preparedStatements = statements.map((statement) => {
+      D1Guards.assertNonEmptyString(statement.query, "Batch statement query");
+      let prepared = database.prepare(QueryNormalizer.normalizeQuery(statement.query));
+      const parameters = this.normalizeParameters(statement.parameters);
+      if (parameters.length > 0) {
+        prepared = prepared.bind(...parameters);
+      }
+      return prepared;
+    });
+
+    try {
+      const results = await database.batch(preparedStatements);
+      results.forEach((result, index) => {
+        this.errorHandler.checkD1Error(
+          result,
+          QueryNormalizer.normalizeQuery(statements[index]?.query || "D1 batch statement")
+        );
+      });
+      return results;
+    } catch (error: unknown) {
+      if (error instanceof D1QueryError) {
+        throw error;
+      }
+      const preview = statements.map((statement) => statement.query).join("; ");
+      throw this.errorHandler.wrapD1Exception(error, preview);
+    }
   }
 
   /**
@@ -146,7 +242,7 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
     let stmt = database.prepare(query);
     if (parameters && parameters.length > 0) {
       // Convert undefined to null for D1 compatibility (D1 doesn't support undefined)
-      const normalizedParameters = parameters.map(p => p === undefined ? null : p);
+      const normalizedParameters = this.normalizeParameters(parameters);
       stmt = stmt.bind(...normalizedParameters);
     }
     
@@ -161,6 +257,9 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
         return this.mapD1RunResult(result, useStructuredResult, isInsert);
       }
     } catch (error: unknown) {
+      if (error instanceof D1QueryError) {
+        throw error;
+      }
       // D1 may throw exceptions directly (not just in result.error)
       // Wrap and re-throw with better context
       throw this.errorHandler.wrapD1Exception(error, query);
@@ -224,6 +323,19 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
     }
   }
 
+  private normalizeParameters(parameters: Array<unknown> | undefined): D1Bindable[] {
+    return (parameters || []).map((parameter) =>
+      parameter === undefined ? null : parameter
+    ) as D1Bindable[];
+  }
+
+  private getRawResultForBroadcaster(result: QueryResult | unknown, useStructuredResult: boolean): unknown {
+    if (useStructuredResult && result && typeof result === "object" && "raw" in result) {
+      return (result as QueryResult).raw;
+    }
+    return result;
+  }
+
   /**
    * Starts a new transaction.
    * 
@@ -262,8 +374,8 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
     }
 
     try {
-      // For D1, we've already executed all queries individually during the transaction
-      // D1's transaction model is different - queries are atomic within the transaction
+      // For D1, we've already executed all queries individually during the
+      // compatibility transaction. This commit only clears local state.
       this.isTransactionActive = false;
       (this as any).isTransactionActive = false;
       this.transactionStatements.length = 0;
@@ -336,7 +448,7 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
   async getTables(tableNames?: string[]): Promise<Table[]> {
     const query = tableNames
       ? `SELECT name, sql FROM sqlite_master WHERE type='table' AND name IN (${tableNames.map(() => '?').join(',')})`
-      : `SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`;
+      : `SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND substr(lower(name), 1, 4) != '_cf_'`;
     
     const result = await this.query(query, tableNames || undefined);
     
@@ -363,10 +475,8 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
   /**
    * Gets a single view by name.
    * 
-   * Note: D1 doesn't fully support views, so this always returns undefined.
-   * 
    * @param viewName - Name of the view
-   * @returns Always undefined for D1
+   * @returns View metadata or undefined if the view does not exist
    */
   async getView(viewName: string): Promise<View | undefined> {
     const query = `SELECT name, sql FROM sqlite_master WHERE type='view' AND name = ?`;
@@ -374,23 +484,27 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
     if (!result || !Array.isArray(result) || result.length === 0) {
       return undefined;
     }
-    return undefined;
+    const row = result[0] as { name: string; sql: string };
+    return this.parseView(row);
   }
 
   /**
    * Gets all views (optionally filtered by names).
    * 
-   * Note: D1 doesn't fully support views, so this always returns an empty array.
-   * 
    * @param viewNames - Optional array of view names to filter
-   * @returns Always empty array for D1
+   * @returns View metadata for matching views
    */
   async getViews(viewNames?: string[]): Promise<View[]> {
     const query = viewNames
       ? `SELECT name, sql FROM sqlite_master WHERE type='view' AND name IN (${viewNames.map(() => '?').join(',')})`
       : `SELECT name, sql FROM sqlite_master WHERE type='view'`;
     const result = await this.query(query, viewNames || undefined);
-    return [];
+    if (!result || !Array.isArray(result)) {
+      return [];
+    }
+    return result
+      .map((row) => this.parseView(row as { name: string; sql: string }))
+      .filter((view): view is View => Boolean(view));
   }
 
   /**
@@ -851,6 +965,22 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
     return `CREATE ${unique}INDEX IF NOT EXISTS ${this.escape(indexName)} ON ${this.escape(tableName)} (${columns})`;
   }
 
+  private parseView(row: { name: string; sql: string }): View | undefined {
+    if (!row.sql) {
+      return undefined;
+    }
+
+    const match = row.sql.match(/\sAS\s([\s\S]+)$/i);
+    if (!match) {
+      return undefined;
+    }
+
+    return new View({
+      name: row.name,
+      expression: match[1].trim(),
+    });
+  }
+
   /**
    * Builds DROP TABLE SQL statement.
    * 
@@ -863,4 +993,3 @@ export class D1QueryRunner extends AbstractSqliteQueryRunner {
     return `DROP TABLE ${ifExist ? "IF EXISTS " : ""}${this.escape(tableName)}`;
   }
 }
-

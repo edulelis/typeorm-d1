@@ -234,16 +234,13 @@ describe("Schema Synchronization Tests", () => {
       dataSource = await createTestDataSource(getAllEntities());
       await dataSource.initialize();
 
-      // Check if foreign key is created (SQLite stores this in sqlite_master)
-      const result = await db.prepare(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='posts'"
-      ).all();
+      const foreignKeys = await db.prepare("PRAGMA foreign_key_list(posts)").all();
+      const authorForeignKey = foreignKeys.results?.find((fk: any) => fk.from === "authorId");
 
-      expect(result.results).toBeDefined();
-      const sql = result.results?.[0]?.sql;
-      expect(sql).toBeDefined();
-      // Foreign key should be in the CREATE TABLE statement
-      expect(sql?.toUpperCase()).toContain("AUTHORID");
+      expect(authorForeignKey).toBeDefined();
+      expect(authorForeignKey?.table).toBe("users");
+      expect(authorForeignKey?.to).toBe("id");
+      expect(authorForeignKey?.on_delete).toBe("CASCADE");
     });
 
     it("should create join table for ManyToMany", async () => {
@@ -259,6 +256,10 @@ describe("Schema Synchronization Tests", () => {
 
       expect(result.results).toBeDefined();
       expect(result.results?.length).toBe(1);
+
+      const foreignKeys = await db.prepare("PRAGMA foreign_key_list(post_tags)").all();
+      const fromColumns = foreignKeys.results?.map((fk: any) => fk.from).sort();
+      expect(fromColumns).toEqual(["postId", "tagId"]);
     });
   });
 
@@ -326,4 +327,3 @@ describe("Schema Synchronization Tests", () => {
     });
   });
 });
-

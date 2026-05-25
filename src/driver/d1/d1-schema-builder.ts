@@ -1,7 +1,7 @@
 // D1 schema builder implementation for TypeORM
 
-import { RdbmsSchemaBuilder } from "typeorm/schema-builder/RdbmsSchemaBuilder";
-import { DataSource } from "typeorm/data-source/DataSource";
+import { RdbmsSchemaBuilder } from "typeorm/schema-builder/RdbmsSchemaBuilder.js";
+import { DataSource } from "typeorm/data-source/DataSource.js";
 
 /**
  * D1SchemaBuilder handles schema operations (migrations, synchronization).

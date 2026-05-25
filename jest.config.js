@@ -26,12 +26,13 @@ module.exports = {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'json', 'html'],
-  testTimeout: 10000,
-  // Miniflare v2 requires experimental VM modules for SQLite
-  globals: {
-    'ts-jest': {
-      isolatedModules: true,
+  coverageThreshold: {
+    global: {
+      statements: 85,
+      branches: 75,
+      functions: 85,
+      lines: 85,
     },
   },
+  testTimeout: 10000,
 };
-

@@ -1,13 +1,13 @@
 // D1 driver implementation for TypeORM
 
-import { DataSource } from "typeorm/data-source/DataSource";
+import { DataSource } from "typeorm/data-source/DataSource.js";
 import { DataSourceOptions } from "typeorm";
-import { AbstractSqliteDriver } from "typeorm/driver/sqlite-abstract/AbstractSqliteDriver";
+import { AbstractSqliteDriver } from "typeorm/driver/sqlite-abstract/AbstractSqliteDriver.js";
 import { D1QueryRunner } from "./d1-query-runner";
 import { D1Database } from "../../types";
-import { ReplicationMode } from "typeorm/driver/types/ReplicationMode";
-import { QueryRunner } from "typeorm/query-runner/QueryRunner";
-import { ColumnType } from "typeorm/driver/types/ColumnTypes";
+import { ReplicationMode } from "typeorm/driver/types/ReplicationMode.js";
+import { QueryRunner } from "typeorm/query-runner/QueryRunner.js";
+import { ColumnType } from "typeorm/driver/types/ColumnTypes.js";
 import { D1ValidationError, D1ConnectionError } from "../../errors";
 import { D1Guards } from "../../utils/guards";
 
@@ -173,10 +173,11 @@ export class D1Driver extends AbstractSqliteDriver {
   }
 
   /**
-   * Transaction support level for D1.
-   * 
-   * D1 supports simple transactions via batch API, but not nested transactions.
+   * Transaction support level for TypeORM compatibility.
+   *
+   * D1 does not expose interactive transactions. Query runner transaction
+   * methods are compatibility shims and explicit atomic batches are exposed
+   * separately through D1QueryRunner.executeBatch().
    */
   transactionSupport: "simple" | "nested" | "none" = "simple";
 }
-

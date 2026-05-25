@@ -1,7 +1,7 @@
 // D1 driver factory implementation for TypeORM
 
-import { DriverFactory } from "typeorm/driver/DriverFactory";
-import { DataSource } from "typeorm/data-source/DataSource";
+import { DriverFactory } from "typeorm/driver/DriverFactory.js";
+import { DataSource } from "typeorm/data-source/DataSource.js";
 import { D1Driver } from "./d1-driver";
 import { D1ValidationError } from "../../errors";
 
